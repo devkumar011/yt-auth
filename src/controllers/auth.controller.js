@@ -2,7 +2,9 @@ import userModel from "../models/user.model.js";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 import config from "../config/config.js";
+import sessionModel from "../models/session.model.js";
 
+// ================= REGISTER =================
 export async function register(req, res) {
     const { username, email, password } = req.body;
 
@@ -58,27 +60,43 @@ export async function register(req, res) {
     }
 }
 
+// ================= GET ME =================
 export async function getMe(req, res) {
-    const token = req.headers.authorization?.split(" ")[1];
+    try {
+        const token = req.headers.authorization?.split(" ")[1];
 
-    if (!token) {
+        if (!token) {
+            return res.status(401).json({
+                message: "Token not found"
+            });
+        }
+
+        const decoded = jwt.verify(token, config.JWT_SECRET);
+
+        const user = await userModel.findById(decoded.id);
+
+        if (!user) {
+            return res.status(404).json({
+                message: "User not found"
+            });
+        }
+
+        return res.status(200).json({
+            message: "User fetched successfully",
+            user: {
+                username: user.username,
+                email: user.email,
+            }
+        });
+
+    } catch (error) {
         return res.status(401).json({
-            message: "Token not found"
+            message: "Invalid token"
         });
     }
-
-    const decoded = jwt.verify(token, config.JWT_SECRET);
-    const user = await userModel.findById(decoded.id);
-
-    res.status(200).json({
-        message: "User fetched successfully",
-        user: {
-            username: user.username,
-            email: user.email,
-        }
-    });
 }
 
+// ================= REFRESH TOKEN =================
 export async function refreshToken(req, res) {
     try {
         const token = req.cookies?.accessToken;
@@ -91,7 +109,7 @@ export async function refreshToken(req, res) {
 
         const decoded = jwt.verify(token, config.JWT_SECRET);
 
-        const newaccessToken = jwt.sign(
+        const newAccessToken = jwt.sign(
             { id: decoded.id },
             config.JWT_SECRET,
             { expiresIn: "15m" }
@@ -115,23 +133,40 @@ export async function refreshToken(req, res) {
     }
 }
 
-export function generateAccessTokenFromCookie(req) {
-    const token = req.cookies?.accessToken;
+// ================= GENERATE TOKEN FROM COOKIE =================
+export async function generateAccessTokenFromCookie(req) {
+    try {
+        const token = req.cookies?.accessToken;
 
-    if (!token) return null;
+        if (!token) return null;
 
-    const decoded = jwt.verify(token, config.JWT_SECRET);
+        const decoded = jwt.verify(token, config.JWT_SECRET);
 
-    const accessToken = jwt.sign(
-        { id: decoded.id },
-        config.JWT_SECRET,
-        { expiresIn: "15m" }
-    )
-    const newRefreshToken = jwt.sign({
-        id: decoded.id
-    }, config.JWT_SECRET, {
-        expiresIn: "7d"
-    })
+        const accessToken = jwt.sign(
+            { id: decoded.id },
+            config.JWT_SECRET,
+            { expiresIn: "15m" }
+        );
 
-    return accessToken;
+        const refreshToken = jwt.sign(
+            { id: decoded.id },
+            config.JWT_SECRET,
+            { expiresIn: "7d" }
+        );
+
+        const refreshTokenHash = crypto
+            .createHash("sha256")
+            .update(refreshToken)
+            .digest("hex");
+
+        await sessionModel.create({
+            userId: decoded.id,
+            refreshTokenHash,
+        });
+
+        return accessToken;
+
+    } catch (error) {
+        return null;
+    }
 }
